@@ -1,5 +1,3 @@
-#MultiModalFusionNet
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -121,11 +119,18 @@ class AnomalyDetectionPipeline:
     """
     Pipeline complet pour la détection d'anomalies multimodale
     """
-    def __init__(self, device='cuda'):
-        self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
+    def __init__(self, device='cpu'):
+        # Forcer CPU si CUDA n'est pas disponible
+        if device == 'cuda' and not torch.cuda.is_available():
+            print("⚠️  CUDA non disponible, utilisation du CPU")
+            device = 'cpu'
+        
+        self.device = torch.device(device)
         self.model = None
         self.scaler_rti = StandardScaler()
         self.scaler_hsi = StandardScaler()
+        
+        print(f"🖥️  Device utilisé: {self.device}")
         
     def load_features(self, results_folder):
         """Charger les features RTI et HSI depuis les résultats sauvés"""
@@ -175,23 +180,24 @@ class AnomalyDetectionPipeline:
         
         return anomaly_masks
     
-    def train_unsupervised(self, rti_features, hsi_features, epochs=100, lr=0.001):
+    def train_unsupervised(self, rti_features, hsi_features, epochs=50, lr=0.001):
         """
-        Entraînement non-supervisé du modèle
+        Entraînement non-supervisé du modèle (optimisé pour CPU)
         """
         if self.model is None:
             self.initialize_model(rti_features.shape[1], hsi_features.shape[1])
         
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        # Optimiseur avec paramètres adaptés au CPU
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=1e-5)
         
         # Perte combinée : reconstruction + anomalie
         mse_loss = nn.MSELoss()
-        bce_loss = nn.BCELoss()
         
         self.model.train()
         losses = []
         
-        print("Début de l'entraînement non-supervisé...")
+        print(f"Début de l'entraînement non-supervisé sur {self.device}...")
+        print(f"Epochs réduits à {epochs} pour optimiser le temps CPU")
         
         for epoch in range(epochs):
             optimizer.zero_grad()
@@ -209,21 +215,21 @@ class AnomalyDetectionPipeline:
             # Perte de régularisation pour forcer la sparsité des anomalies
             anomaly_sparsity = torch.mean(outputs['anomaly_score'])
             
-            # Perte de cohérence entre modalités
+            # Perte de cohérence entre modalités (réduite pour CPU)
             rti_attention_loss = torch.var(outputs['rti_attention'])
             hsi_attention_loss = torch.var(outputs['hsi_attention'])
             
-            # Perte totale
+            # Perte totale (coefficients ajustés pour CPU)
             total_loss = (loss_reconstruction + 
-                         0.1 * anomaly_sparsity + 
-                         0.01 * (rti_attention_loss + hsi_attention_loss))
+                         0.05 * anomaly_sparsity + 
+                         0.005 * (rti_attention_loss + hsi_attention_loss))
             
             total_loss.backward()
             optimizer.step()
             
             losses.append(total_loss.item())
             
-            if epoch % 20 == 0:
+            if epoch % 10 == 0:
                 print(f"Epoch {epoch}/{epochs}, Loss: {total_loss.item():.6f}")
         
         print("✓ Entraînement terminé")
@@ -339,12 +345,12 @@ class AnomalyDetectionPipeline:
 # ==================== EXEMPLE D'UTILISATION ====================
 def run_anomaly_detection_pipeline(results_folder):
     """
-    Pipeline complet de détection d'anomalies
+    Pipeline complet de détection d'anomalies (optimisé CPU)
     """
     print("🚀 Démarrage du pipeline de détection d'anomalies")
     
-    # Initialiser le pipeline
-    pipeline = AnomalyDetectionPipeline()
+    # Initialiser le pipeline en CPU
+    pipeline = AnomalyDetectionPipeline(device='cuda')
     
     # Charger les features
     rti_features, hsi_features = pipeline.load_features(results_folder)
@@ -352,17 +358,20 @@ def run_anomaly_detection_pipeline(results_folder):
     # Initialiser le modèle
     pipeline.initialize_model(rti_features.shape[1], hsi_features.shape[1])
     
-    # Entraîner le modèle
-    losses = pipeline.train_unsupervised(rti_features, hsi_features, epochs=160)
+    # Entraîner le modèle (epochs réduits pour CPU)
+    print("⏱️  Entraînement optimisé pour CPU (peut prendre quelques minutes)...")
+    losses = pipeline.train_unsupervised(rti_features, hsi_features, epochs=100)
     
     # Détecter les anomalies
-    results = pipeline.detect_anomalies(rti_features, hsi_features, threshold=0.3)
+    print("🔍 Détection des anomalies...")
+    results = pipeline.detect_anomalies(rti_features, hsi_features, threshold=0.4)
     
     # Créer dossier de sortie
     output_folder = os.path.join(results_folder, "anomaly_detection")
     os.makedirs(output_folder, exist_ok=True)
     
     # Visualiser les résultats
+    print("📊 Génération des visualisations...")
     pipeline.visualize_results(results, output_folder)
     
     # Sauvegarder le modèle
@@ -376,17 +385,36 @@ def run_anomaly_detection_pipeline(results_folder):
     # Graphique des pertes d'entraînement
     plt.figure(figsize=(10, 6))
     plt.plot(losses)
-    plt.title('Évolution de la perte pendant l\'entraînement')
+    plt.title('Évolution de la perte pendant l\'entraînement (CPU)')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.grid(True)
     plt.savefig(os.path.join(output_folder, 'training_losses.png'), dpi=300, bbox_inches='tight')
     plt.show()
     
+    # Estimation des performances
+    print(f"\n⚡ Informations de performance:")
+    print(f"  • Device utilisé: {pipeline.device}")
+
     print(f"✅ Pipeline terminé ! Résultats dans: {output_folder}")
     
     return pipeline, results
 
-# Utilisation :
-results_folder = "D:/project/meh/results_20250729_141710/"  # ton dossier de résultats
+# ==================== UTILISATION OPTIMISÉE CPU ====================
+
+#UTILISATION :
+
+# Remplace par ton dossier de résultats
+results_folder = "D:/project/meh/results_20250729_151145/"
+
+# Lance le pipeline (optimisé CPU)
 pipeline, results = run_anomaly_detection_pipeline(results_folder)
+'''
+# Si tu veux réduire encore plus le temps d'entraînement :
+pipeline = AnomalyDetectionPipeline(device='cpu')
+rti_features, hsi_features = pipeline.load_features(results_folder)
+pipeline.initialize_model(rti_features.shape[1], hsi_features.shape[1])
+losses = pipeline.train_unsupervised(rti_features, hsi_features, epochs=15)  # Encore plus rapide
+results = pipeline.detect_anomalies(rti_features, hsi_features, threshold=0.3)
+
+'''
